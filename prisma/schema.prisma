@@ -1,0 +1,184 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Match {
+  id           String   @id @default(cuid())
+  homeTeam     String
+  awayTeam     String
+  homeScore    Int      @default(0)
+  awayScore    Int      @default(0)
+  status       String   @default("UPCOMING")
+  minute       Int      @default(0)
+  league       String
+  leagueLogo   String   @default("")
+  homeLogo     String   @default("")
+  awayLogo     String   @default("")
+  stadium      String   @default("")
+  kickoff      String   @default("")
+  isHot        Boolean  @default(false)
+  events       String   @default("[]")
+  homeForm     String   @default("[]")
+  awayForm     String   @default("[]")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  poll         Poll?
+}
+
+model Standing {
+  id       String   @id @default(cuid())
+  position Int
+  team     String
+  teamLogo String   @default("")
+  played   Int      @default(0)
+  won      Int      @default(0)
+  drawn    Int      @default(0)
+  lost     Int      @default(0)
+  gf       Int      @default(0)
+  ga       Int      @default(0)
+  gd       Int      @default(0)
+  points   Int      @default(0)
+  league   String
+  form     String   @default("[]")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Scorer {
+  id        String   @id @default(cuid())
+  name      String
+  team      String
+  teamLogo  String   @default("")
+  goals     Int      @default(0)
+  assists   Int      @default(0)
+  matches   Int      @default(0)
+  league    String
+  photoUrl  String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Poll {
+  id        String   @id @default(cuid())
+  matchId   String   @unique
+  homeVotes Int      @default(0)
+  drawVotes Int      @default(0)
+  awayVotes Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  match     Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+}
+
+model NewsItem {
+  id             String   @id @default(cuid())
+  title          String
+  slug           String?  @unique
+  summary        String
+  content        String   @default("")
+  category       String   @default("Transfer")
+  imageUrl       String   @default("")
+  imageAlt       String   @default("")
+  imageWidth     Int      @default(0)
+  imageHeight    Int      @default(0)
+  imageSource    String   @default("")
+  source         String   @default("GOALZONE AI")
+  sourceUrl      String   @default("")
+  tags           String   @default("[]")
+  seoTitle       String   @default("")
+  seoDescription String   @default("")
+  seoKeywords    String   @default("[]")
+  keywords       String   @default("")
+  league         String   @default("")
+  matchId        String?
+  isAiGenerated  Boolean  @default(true)
+  isPublished    Boolean  @default(true)
+  isHeadline     Boolean  @default(false)
+  language       String   @default("id")
+  viewCount      Int      @default(0)
+  publishedAt    DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt @default(now())
+}
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  email        String   @unique
+  passwordHash String   @default("")
+  displayName  String   @default("")
+  avatarUrl    String   @default("")
+  role         String   @default("editor")
+  isActive     Boolean  @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  activities   ActivityLog[]
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  resource  String
+  resourceId String  @default("")
+  details   String   @default("{}")
+  ip        String   @default("")
+  createdAt DateTime @default(now())
+
+  user      AdminUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model TrendingTopic {
+  id          String   @id @default(cuid())
+  keyword     String
+  source      String   @default("google")
+  volume      Int      @default(0)
+  category    String   @default("football")
+  region      String   @default("global")
+  isProcessed Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ScheduledTask {
+  id          String   @id @default(cuid())
+  type        String
+  status      String   @default("pending")
+  schedule    String   @default("")
+  lastRunAt   DateTime?
+  nextRunAt   DateTime?
+  result      String   @default("{}")
+  isEnabled   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model TelegramPost {
+  id           String   @id @default(cuid())
+  newsId       String?
+  chatId       String   @default("")
+  message      String
+  status       String   @default("pending")
+  sentAt       DateTime?
+  error        String   @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model InternalLink {
+  id           String   @id @default(cuid())
+  sourceSlug   String
+  targetSlug   String
+  anchorText   String   @default("")
+  createdAt    DateTime @default(now())
+
+  @@unique([sourceSlug, targetSlug])
+}
