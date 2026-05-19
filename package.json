@@ -1,11 +1,17 @@
 {
-  "name": "ws-service",
+  "name": "goalzone-ws-service",
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "bun index.ts"
+    "dev": "bun --hot index.ts",
+    "postinstall": "prisma generate",
+    "start": "bun index.ts"
   },
   "dependencies": {
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "@prisma/client": "6.7.0"
+  },
+  "devDependencies": {
+    "prisma": "6.7.0"
   }
 }

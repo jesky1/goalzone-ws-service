@@ -1,7 +1,3 @@
-# GoalZone WS Service - Standalone Docker
-# Compatible with Railway, Fly.io, Koyeb, and any Docker-hosting platform
-# Uses its own prisma/schema.prisma (PostgreSQL provider)
-
 FROM oven/bun:1
 
 WORKDIR /app
@@ -12,11 +8,11 @@ COPY prisma ./prisma/
 # Copy package files
 COPY package.json ./
 
-# Install dependencies
+# Install dependencies (pins Prisma 6.x to avoid Prisma 7 breaking changes)
 RUN bun install
 
-# Generate Prisma client
-RUN bunx prisma generate
+# Generate Prisma client using the installed version
+RUN bunx --bun prisma generate
 
 # Copy application code
 COPY index.ts ./
@@ -25,14 +21,12 @@ COPY db.ts ./
 # Cloud platforms provide PORT via environment variable
 ENV PORT=10000
 
-# Environment variables (configured by the cloud platform)
-ENV DATABASE_URL=""
+# Non-sensitive defaults only (secrets are set via cloud platform env vars)
 ENV DATA_MODE=mock
-ENV FOOTBALL_API_KEY=""
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/health || exit 1
+  CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Start the service
 CMD ["bun", "index.ts"]
