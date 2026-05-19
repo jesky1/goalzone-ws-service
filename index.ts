@@ -16,9 +16,11 @@ interface GoalEvent {
   awayScore: number
 }
 
+// --- DB connection status ---
+let dbConnected = false
+
 // --- HTTP Server with health check ---
 const httpServer = createServer((req, res) => {
-  // Health check endpoint for Render.com / cloud platforms
   if (req.url === '/health' || (req.url === '/' && req.method === 'GET')) {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
@@ -28,6 +30,7 @@ const httpServer = createServer((req, res) => {
       clients: connectedClientCount,
       dataMode: process.env.DATA_MODE || 'mock',
       db: process.env.DATABASE_URL?.startsWith('postgres') ? 'PostgreSQL (Supabase)' : 'SQLite',
+      dbConnected,
     }))
     return
   }
@@ -50,7 +53,6 @@ const STATUS_ORDER: Record<string, number> = { LIVE: 0, HT: 1, UPCOMING: 2, FT: 
 // --- Fetch all matches from DB via Prisma ---
 async function fetchMatchesFromDB() {
   const matches = await db.match.findMany()
-  // Replicate the CASE-based ordering from the original raw SQL
   matches.sort((a, b) => (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99))
   return matches
 }
@@ -187,7 +189,6 @@ async function syncRealData(): Promise<GoalEvent[]> {
   const goals: GoalEvent[] = []
 
   try {
-    // Call the Next.js API to sync data (use env var for production)
     const nextApiUrl = process.env.NEXT_API_URL || 'http://localhost:3000'
     const response = await fetch(`${nextApiUrl}/api/football`, {
       method: 'POST',
@@ -199,9 +200,6 @@ async function syncRealData(): Promise<GoalEvent[]> {
       console.error('Real data sync failed:', response.status)
       return goals
     }
-
-    // Detect goals by comparing before/after
-    // This is handled by checkAndEmitUpdates below
   } catch (error) {
     console.error('Error syncing real data:', error)
   }
@@ -281,20 +279,27 @@ io.on('connection', (socket) => {
   console.log(`🔌 Client connected: ${socket.id} (${connectedClientCount} total)`)
   broadcastClientCount()
 
-    // Send initial data asynchronously
+    // Send initial data asynchronously (non-blocking)
     ; (async () => {
-      const rawMatches = await fetchMatchesFromDB()
-      const formattedMatches = formatMatchData(rawMatches)
-      const scorers = await fetchScorersFromDB()
-      const standings = await fetchStandingsFromDB()
-
-      socket.emit('initialData', { matches: formattedMatches, scorers, standings, timestamp: new Date().toISOString() })
+      try {
+        const rawMatches = await fetchMatchesFromDB()
+        const formattedMatches = formatMatchData(rawMatches)
+        const scorers = await fetchScorersFromDB()
+        const standings = await fetchStandingsFromDB()
+        socket.emit('initialData', { matches: formattedMatches, scorers, standings, timestamp: new Date().toISOString() })
+      } catch (err) {
+        console.error('Error sending initial data:', err)
+      }
     })()
 
   socket.on('requestUpdate', async () => {
-    const rawMatches = await fetchMatchesFromDB()
-    const formattedMatches = formatMatchData(rawMatches)
-    socket.emit('liveMatchesUpdate', { matches: formattedMatches, timestamp: new Date().toISOString() })
+    try {
+      const rawMatches = await fetchMatchesFromDB()
+      const formattedMatches = formatMatchData(rawMatches)
+      socket.emit('liveMatchesUpdate', { matches: formattedMatches, timestamp: new Date().toISOString() })
+    } catch (err) {
+      console.error('Error on requestUpdate:', err)
+    }
   })
 
   socket.on('disconnect', (reason) => {
@@ -306,48 +311,73 @@ io.on('connection', (socket) => {
   socket.on('error', (error) => { console.error(`Socket error (${socket.id}):`, error) })
 })
 
-  // --- Main update loop ---
+// =============================================
+// START SERVER FIRST (so health check passes)
+// THEN initialize database connection
+// =============================================
+const PORT = parseInt(process.env.PORT || '3003', 10)
+
+httpServer.listen(PORT, () => {
+  console.log(`⚽ GOALZONE WebSocket Server running on port ${PORT}`)
+  console.log(`📡 Data mode: ${process.env.DATA_MODE || 'mock'}`)
+  console.log(`💾 Database URL: ${process.env.DATABASE_URL ? 'set ✅' : 'NOT SET ❌'}`)
+})
+
+  // --- Initialize database + start update loop (non-blocking) ---
   ; (async () => {
-    const initialMatches = await fetchMatchesFromDB()
-    const initialFormatted = formatMatchData(initialMatches)
-    for (const match of initialFormatted) {
-      prevMatchesMap.set(match.id, { homeScore: match.homeScore, awayScore: match.awayScore, status: match.status, minute: match.minute })
-    }
+    // Test database connection
+    try {
+      await db.$connect()
+      dbConnected = true
+      console.log('✅ Database connected!')
 
-    // Determine data mode
-    const DATA_MODE = process.env.DATA_MODE || 'mock'
-    const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY || ''
-    const useRealData = DATA_MODE === 'real' && FOOTBALL_API_KEY.length > 0
-
-    const SIMULATION_INTERVAL = 10000 // 10 seconds
-    const REAL_SYNC_INTERVAL = 30000 // 30 seconds for real API
-
-    setInterval(async () => {
-      try {
-        if (useRealData) {
-          // Real mode: sync from Football API
-          await syncRealData()
-        } else {
-          // Mock mode: simulate match progression
-          await simulateMatchUpdates()
-        }
-
-        // Emit changes to all clients
-        await checkAndEmitUpdates()
-      } catch (err) {
-        console.error('Error in update cycle:', err)
+      // Load initial match data
+      const initialMatches = await fetchMatchesFromDB()
+      const initialFormatted = formatMatchData(initialMatches)
+      for (const match of initialFormatted) {
+        prevMatchesMap.set(match.id, { homeScore: match.homeScore, awayScore: match.awayScore, status: match.status, minute: match.minute })
       }
-    }, useRealData ? REAL_SYNC_INTERVAL : SIMULATION_INTERVAL)
+      console.log(`📊 Loaded ${initialFormatted.length} matches from database`)
 
-    // --- Start Server ---
-    const PORT = parseInt(process.env.PORT || '3003', 10)
-    httpServer.listen(PORT, () => {
-      console.log(`⚽ GOALZONE WebSocket Server running on port ${PORT}`)
-      console.log(`📡 Data mode: ${useRealData ? 'REAL (API-Football)' : 'MOCK (simulasi)'}`)
+      // Determine data mode
+      const DATA_MODE = process.env.DATA_MODE || 'mock'
+      const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY || ''
+      const useRealData = DATA_MODE === 'real' && FOOTBALL_API_KEY.length > 0
+
+      const SIMULATION_INTERVAL = 10000
+      const REAL_SYNC_INTERVAL = 30000
+
+      setInterval(async () => {
+        try {
+          if (useRealData) {
+            await syncRealData()
+          } else {
+            await simulateMatchUpdates()
+          }
+          await checkAndEmitUpdates()
+        } catch (err) {
+          console.error('Error in update cycle:', err)
+        }
+      }, useRealData ? REAL_SYNC_INTERVAL : SIMULATION_INTERVAL)
+
       console.log(`⏱️  Update interval: ${useRealData ? REAL_SYNC_INTERVAL / 1000 : SIMULATION_INTERVAL / 1000}s`)
-      console.log(`🔗 Connect via: io('/?XTransformPort=${PORT}') or direct URL`)
-      console.log(`💾 Database: ${process.env.DATABASE_URL?.startsWith('postgres') ? 'PostgreSQL (Supabase)' : process.env.DATABASE_URL?.startsWith('file:') ? 'SQLite' : 'Unknown'}`)
-    })
+    } catch (err) {
+      console.error('❌ Database connection failed:', err)
+      console.error('⚠️  Server is running but without database. Health check will still pass.')
+      console.error('⚠️  Check your DATABASE_URL environment variable.')
+
+      // Retry database connection every 10 seconds
+      const retryInterval = setInterval(async () => {
+        try {
+          await db.$connect()
+          dbConnected = true
+          console.log('✅ Database connected on retry!')
+          clearInterval(retryInterval)
+        } catch {
+          console.error('❌ Database retry failed...')
+        }
+      }, 10000)
+    }
   })()
 
 // --- Graceful Shutdown ---
